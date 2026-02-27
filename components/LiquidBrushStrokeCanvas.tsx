@@ -14,17 +14,17 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-// ── Bezier sampling ────────────────────────────────────────────────────────────
+// ── Cubic bezier sampling ──────────────────────────────────────────────────────
 function sampleCubicBezier(
   p0x: number, p0y: number,
   cp1x: number, cp1y: number,
   cp2x: number, cp2y: number,
   p3x: number, p3y: number,
-  numSamples: number,
+  n: number,
 ): [number, number][] {
   const pts: [number, number][] = [];
-  for (let i = 0; i <= numSamples; i++) {
-    const t = i / numSamples;
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
     const mt = 1 - t;
     pts.push([
       mt * mt * mt * p0x + 3 * mt * mt * t * cp1x + 3 * mt * t * t * cp2x + t * t * t * p3x,
@@ -34,15 +34,16 @@ function sampleCubicBezier(
   return pts;
 }
 
-// ── Per-frame normal vectors in pixel space ────────────────────────────────────
-function computeNormalsPixel(
-  ptsNorm: [number, number][],
+// ── Per-point perpendicular normals in pixel space ─────────────────────────────
+function computeNormals(
+  pts: [number, number][],
   w: number,
   h: number,
 ): [number, number][] {
-  return ptsNorm.map((_, i) => {
-    const prev = ptsNorm[Math.max(0, i - 1)];
-    const next = ptsNorm[Math.min(ptsNorm.length - 1, i + 1)];
+  const last = pts.length - 1;
+  return pts.map((_, i) => {
+    const prev = pts[Math.max(0, i - 1)];
+    const next = pts[Math.min(last, i + 1)];
     const dx = (next[0] - prev[0]) * w;
     const dy = (next[1] - prev[1]) * h;
     const len = Math.hypot(dx, dy) || 1;
@@ -52,7 +53,50 @@ function computeNormalsPixel(
 
 // ── Easing ─────────────────────────────────────────────────────────────────────
 function easeOutCubic(t: number): number {
-  return 1 - Math.pow(1 - t, 3);
+  return 1 - (1 - t) ** 3;
+}
+
+// ── Half-width profile along a stroke ─────────────────────────────────────────
+// t        – position along the *drawn* portion [0, 1]
+// isLive   – stroke tip is still animating (not yet complete)
+// maxHW    – maximum half-width in pixels
+function halfWidthAt(t: number, isLive: boolean, maxHW: number): number {
+  // Press-in at start: quick ramp over the first ~3 %
+  const entry = t < 0.03 ? (t / 0.03) ** 0.65 : 1.0;
+
+  // Lift-off at tip:
+  //   during animation → thin wet-tip zone (last 6 %)
+  //   when complete    → natural brush-lift taper (last 20 %)
+  const tipLen = isLive ? 0.06 : 0.20;
+  const tipPow = isLive ? 0.38 : 1.05;
+  const tip =
+    t > 1.0 - tipLen
+      ? ((1.0 - t) / tipLen) ** tipPow
+      : 1.0;
+
+  return maxHW * entry * tip;
+}
+
+// ── Types ──────────────────────────────────────────────────────────────────────
+interface BristleDef {
+  perpFrac: number;  // lateral offset as fraction of half-width
+  opacity: number;
+  width: number;     // line width in pixels
+}
+
+interface StrokeDef {
+  p0x: number; p0y: number;
+  cp1x: number; cp1y: number;
+  cp2x: number; cp2y: number;
+  p3x: number; p3y: number;
+  r: number; g: number; b: number;
+  halfWidthFactor: number; // max half-width as fraction of canvas width
+  startTime: number;       // seconds after page load
+  duration: number;        // seconds to paint fully
+  points: [number, number][];
+  edgeNoiseL: number[];    // per-sample noise multiplier in (-1, 1), left edge
+  edgeNoiseR: number[];    // per-sample noise multiplier in (-1, 1), right edge
+  bristles: BristleDef[];
 }
 
 // ── Hex → RGB ──────────────────────────────────────────────────────────────────
@@ -64,119 +108,56 @@ function hexToRgb(hex: string): [number, number, number] {
   ];
 }
 
-// ── Stroke data ────────────────────────────────────────────────────────────────
-const NUM_SAMPLES = 100;
+// ── Constants ──────────────────────────────────────────────────────────────────
+const NUM_SAMPLES = 140;       // bezier sample count — high enough for smooth polygons
+const ANIMATION_END_TIME = 3.6;
+const BLOB_BASE_ALPHA = 0.52;
+const BLOB_FADE_EXP = 2.2;
 
-// After all strokes are fully painted on (~2.94 s), we keep a small buffer then stop.
-const ANIMATION_END_TIME = 3.2;
-
-// Wet-blob leading-edge fade parameters
-const BLOB_BASE_ALPHA = 0.50;
-const BLOB_FADE_EXPONENT = 6;
-
-// Fraction of bristle-offset amplitude added as random jitter per stroke
-const BRISTLE_JITTER_AMPLITUDE = 0.06;
-
-interface StrokeDef {
-  p0x: number; p0y: number;
-  cp1x: number; cp1y: number;
-  cp2x: number; cp2y: number;
-  p3x: number; p3y: number;
-  color: string;
-  widthFactor: number;  // stroke width as fraction of canvas width
-  startTime: number;    // seconds from page load
-  duration: number;     // seconds to fully paint this stroke
-  // Precomputed normalised sample points (stable across resize)
-  points: [number, number][];
-  // Deterministic bristle texture offsets/opacities
-  bristleOffsets: number[];
-  bristleOpacities: number[];
-}
-
+// ── Build stroke definitions (deterministic) ───────────────────────────────────
 function buildStrokeDefs(): StrokeDef[] {
-  const rand = mulberry32(0x3c7f9e2a);
+  const rand = mulberry32(0x9fa2c3e1);
 
+  // Generate smooth low-frequency noise for organic edge texture.
+  // Uses cosine interpolation between sparse random control points.
+  function smoothNoise(n: number): number[] {
+    const step = 10; // one control value every ~10 samples
+    const nCtrl = Math.ceil(n / step) + 2;
+    const ctrl = Array.from({ length: nCtrl }, () => (rand() - 0.5) * 2);
+    return Array.from({ length: n }, (_, i) => {
+      const fi = i / step;
+      const lo = Math.floor(fi);
+      const hi = Math.min(lo + 1, nCtrl - 1);
+      const frac = fi - lo;
+      // Hermite smoothstep
+      const s = frac * frac * (3 - 2 * frac);
+      return ctrl[lo] + (ctrl[hi] - ctrl[lo]) * s;
+    });
+  }
+
+  // Stroke path definitions — carefully chosen to spread artfully across the canvas
+  // and evoke the reference images (diagonal sweeps, wavy smears, corner accents).
   const rawDefs = [
-    // 1 · Grand diagonal sweep — bottom-left arc to upper-right
-    {
-      p0x: 0.02, p0y: 0.80,
-      cp1x: 0.18, cp1y: 0.32,
-      cp2x: 0.56, cp2y: 0.15,
-      p3x: 0.94, p3y: 0.20,
-      color: '#D4B5A0',
-      widthFactor: 0.10,
-      startTime: 0.00,
-      duration: 1.00,
-    },
-    // 2 · Wavy sweep across the centre
-    {
-      p0x: 0.04, p0y: 0.54,
-      cp1x: 0.26, cp1y: 0.30,
-      cp2x: 0.70, cp2y: 0.76,
-      p3x: 0.97, p3y: 0.48,
-      color: '#C9A083',
-      widthFactor: 0.085,
-      startTime: 0.40,
-      duration: 0.92,
-    },
-    // 3 · Upper diagonal from left toward centre-right
-    {
-      p0x: 0.10, p0y: 0.07,
-      cp1x: 0.30, cp1y: 0.02,
-      cp2x: 0.52, cp2y: 0.18,
-      p3x: 0.80, p3y: 0.40,
-      color: '#E0C8B8',
-      widthFactor: 0.074,
-      startTime: 0.78,
-      duration: 0.84,
-    },
-    // 4 · Lower gentle sweep
-    {
-      p0x: 0.06, p0y: 0.90,
-      cp1x: 0.28, cp1y: 0.94,
-      cp2x: 0.64, cp2y: 0.83,
-      p3x: 0.96, p3y: 0.70,
-      color: '#B8906E',
-      widthFactor: 0.090,
-      startTime: 1.15,
-      duration: 0.88,
-    },
+    // 1 · Grand arc — lower-left sweeping up to upper-right
+    { hex: '#D4B5A0', p0x: -0.02, p0y: 0.84, cp1x: 0.14, cp1y: 0.28, cp2x: 0.54, cp2y: 0.06, p3x: 1.02, p3y: 0.20, hw: 0.052, start: 0.00, dur: 1.05 },
+    // 2 · Wavy S-curve sweeping across the middle third
+    { hex: '#C9A083', p0x: -0.02, p0y: 0.54, cp1x: 0.30, cp1y: 0.20, cp2x: 0.66, cp2y: 0.80, p3x: 1.02, p3y: 0.46, hw: 0.044, start: 0.36, dur: 0.96 },
+    // 3 · Upper diagonal, left side down to centre-right
+    { hex: '#E0C8B8', p0x: 0.06, p0y: 0.04, cp1x: 0.28, cp1y: -0.02, cp2x: 0.52, cp2y: 0.22, p3x: 0.86, p3y: 0.44, hw: 0.038, start: 0.74, dur: 0.88 },
+    // 4 · Lower broad sweep — base layer
+    { hex: '#B8906E', p0x: -0.02, p0y: 0.90, cp1x: 0.28, cp1y: 0.96, cp2x: 0.64, cp2y: 0.78, p3x: 1.02, p3y: 0.74, hw: 0.048, start: 1.10, dur: 0.92 },
     // 5 · Top-right corner accent
-    {
-      p0x: 0.60, p0y: 0.03,
-      cp1x: 0.76, cp1y: 0.07,
-      cp2x: 0.88, cp2y: 0.22,
-      p3x: 0.98, p3y: 0.46,
-      color: '#D9BDA8',
-      widthFactor: 0.068,
-      startTime: 1.50,
-      duration: 0.74,
-    },
+    { hex: '#D9BDA8', p0x: 0.56, p0y: 0.00, cp1x: 0.74, cp1y: 0.06, cp2x: 0.88, cp2y: 0.24, p3x: 1.02, p3y: 0.50, hw: 0.034, start: 1.46, dur: 0.76 },
     // 6 · Left-side descending stroke
-    {
-      p0x: 0.03, p0y: 0.16,
-      cp1x: 0.07, cp1y: 0.40,
-      cp2x: 0.16, cp2y: 0.64,
-      p3x: 0.30, p3y: 0.94,
-      color: '#C4956B',
-      widthFactor: 0.070,
-      startTime: 1.82,
-      duration: 0.80,
-    },
-    // 7 · Wide bottom sweep
-    {
-      p0x: 0.22, p0y: 0.97,
-      cp1x: 0.46, cp1y: 0.84,
-      cp2x: 0.73, cp2y: 0.90,
-      p3x: 0.97, p3y: 0.97,
-      color: '#D4B5A0',
-      widthFactor: 0.080,
-      startTime: 2.10,
-      duration: 0.84,
-    },
+    { hex: '#C4956B', p0x: 0.00, p0y: 0.12, cp1x: 0.05, cp1y: 0.38, cp2x: 0.12, cp2y: 0.64, p3x: 0.26, p3y: 0.98, hw: 0.036, start: 1.78, dur: 0.82 },
+    // 7 · Bottom anchoring sweep
+    { hex: '#D4B5A0', p0x: 0.16, p0y: 1.02, cp1x: 0.42, cp1y: 0.84, cp2x: 0.72, cp2y: 0.94, p3x: 1.02, p3y: 0.98, hw: 0.042, start: 2.06, dur: 0.86 },
+    // 8 · Short centre accent — adds focal complexity
+    { hex: '#C9A083', p0x: 0.32, p0y: 0.28, cp1x: 0.50, cp1y: 0.14, cp2x: 0.68, cp2y: 0.32, p3x: 0.84, p3y: 0.56, hw: 0.030, start: 2.34, dur: 0.68 },
   ];
 
   return rawDefs.map((def) => {
+    const [r, g, b] = hexToRgb(def.hex);
     const points = sampleCubicBezier(
       def.p0x, def.p0y,
       def.cp1x, def.cp1y,
@@ -184,15 +165,36 @@ function buildStrokeDefs(): StrokeDef[] {
       def.p3x, def.p3y,
       NUM_SAMPLES,
     );
-    // 4 bristle lines at symmetric perpendicular offsets with small deterministic jitter
-    const bristleOffsets = [-0.40, -0.24, 0.24, 0.40]
-      .map((o) => o + (rand() - 0.5) * BRISTLE_JITTER_AMPLITUDE);
-    const bristleOpacities = bristleOffsets.map(() => 0.07 + rand() * 0.06);
-    return { ...def, points, bristleOffsets, bristleOpacities };
+    const edgeNoiseL = smoothNoise(NUM_SAMPLES + 1);
+    const edgeNoiseR = smoothNoise(NUM_SAMPLES + 1);
+
+    // 13–17 bristle lines spanning almost the full width of the stroke.
+    // These create the characteristic parallel-ridge texture of a foundation brush.
+    const bristleCount = 13 + Math.floor(rand() * 5);
+    const bristles: BristleDef[] = Array.from({ length: bristleCount }, () => ({
+      perpFrac: (rand() * 2 - 1) * 0.90,
+      opacity: 0.045 + rand() * 0.075,
+      width: 0.7 + rand() * 1.4,
+    }));
+
+    return {
+      p0x: def.p0x, p0y: def.p0y,
+      cp1x: def.cp1x, cp1y: def.cp1y,
+      cp2x: def.cp2x, cp2y: def.cp2y,
+      p3x: def.p3x, p3y: def.p3y,
+      r, g, b,
+      halfWidthFactor: def.hw,
+      startTime: def.start,
+      duration: def.dur,
+      points,
+      edgeNoiseL,
+      edgeNoiseR,
+      bristles,
+    };
   });
 }
 
-// ── Draw a single stroke at the given eased progress [0, 1] ───────────────────
+// ── Draw a single stroke as a layered filled polygon ──────────────────────────
 function drawStrokeAtProgress(
   ctx: CanvasRenderingContext2D,
   stroke: StrokeDef,
@@ -200,105 +202,170 @@ function drawStrokeAtProgress(
   w: number,
   h: number,
 ) {
-  const count = Math.max(2, Math.round(progress * (stroke.points.length - 1)) + 1);
+  const totalPts = stroke.points.length; // NUM_SAMPLES + 1
+  const count = Math.max(3, Math.round(progress * (totalPts - 1)) + 1);
   const pts = stroke.points;
 
-  // Normals computed once per call in pixel space
-  const normals = computeNormalsPixel(pts.slice(0, count), w, h);
+  const normals = computeNormals(pts.slice(0, count), w, h);
+  const maxHW = stroke.halfWidthFactor * w;
+  const { r, g, b } = stroke;
+  const isLive = progress < 0.96;
+  const noiseAmp = 0.11; // edge noise amplitude as fraction of local half-width
 
-  const sw = stroke.widthFactor * w; // stroke width in pixels
-  const [r, g, b] = hexToRgb(stroke.color);
+  // Pre-compute pixel-space spine + both edges ─────────────────────────────────
+  const spX = new Float32Array(count);
+  const spY = new Float32Array(count);
+  const hwArr = new Float32Array(count);
+  const lX = new Float32Array(count);
+  const lY = new Float32Array(count);
+  const rX = new Float32Array(count);
+  const rY = new Float32Array(count);
 
-  ctx.save();
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
+  for (let i = 0; i < count; i++) {
+    const tDrawn = (count < 2) ? 0 : i / (count - 1);
+    const hw = halfWidthAt(tDrawn, isLive, maxHW);
+    hwArr[i] = hw;
 
-  // Helper: pixel-space coordinate for a normalised sample point
-  const toPx = (i: number): [number, number] => [pts[i][0] * w, pts[i][1] * h];
+    const sx = pts[i][0] * w;
+    const sy = pts[i][1] * h;
+    spX[i] = sx;
+    spY[i] = sy;
 
-  // Helper: pixel coordinate offset perpendicular to the stroke
-  const offsetPx = (i: number, fraction: number): [number, number] => {
     const [nx, ny] = normals[i];
-    const [px, py] = toPx(i);
-    return [px + nx * fraction * sw, py + ny * fraction * sw];
-  };
+    // Edge noise scales with the local width — naturally fades to 0 at the tapered tips
+    const nL = stroke.edgeNoiseL[i] * hw * noiseAmp;
+    const nR = stroke.edgeNoiseR[i] * hw * noiseAmp;
 
-  // Draw a polyline through the first `count` points, using a transform fn
-  function drawPath(
-    getPoint: (i: number) => [number, number],
-    lineWidth: number,
+    lX[i] = sx + nx * (hw + nL);
+    lY[i] = sy + ny * (hw + nL);
+    rX[i] = sx - nx * (hw + nR);
+    rY[i] = sy - ny * (hw + nR);
+  }
+
+  // Helper — fill the polygon bounded by two edge arrays ───────────────────────
+  function fillPoly(
+    aX: Float32Array, aY: Float32Array,
+    bX: Float32Array, bY: Float32Array,
     style: string,
-    shadowColor?: string,
-    shadowBlur?: number,
-    shadowOffsetY?: number,
   ) {
     if (count < 2) return;
-    ctx.lineWidth = lineWidth;
-    ctx.strokeStyle = style;
-    if (shadowColor) {
-      ctx.shadowColor = shadowColor;
-      ctx.shadowBlur = shadowBlur ?? 0;
-      ctx.shadowOffsetY = shadowOffsetY ?? 0;
-    }
     ctx.beginPath();
-    const [x0, y0] = getPoint(0);
-    ctx.moveTo(x0, y0);
-    for (let i = 1; i < count; i++) {
-      const [x, y] = getPoint(i);
-      ctx.lineTo(x, y);
+    ctx.moveTo(aX[0], aY[0]);
+    for (let i = 1; i < count; i++) ctx.lineTo(aX[i], aY[i]);
+    for (let i = count - 1; i >= 0; i--) ctx.lineTo(bX[i], bY[i]);
+    ctx.closePath();
+    ctx.fillStyle = style;
+    ctx.fill();
+  }
+
+  ctx.save();
+
+  // ── Layer 1 · Drop shadow (canvas native shadowBlur) ──────────────────────
+  // Draw the main polygon with shadow enabled — gives genuine soft depth.
+  {
+    const sR = Math.max(0, r - 45);
+    const sG = Math.max(0, g - 45);
+    const sB = Math.max(0, b - 45);
+    ctx.shadowColor = `rgba(${sR},${sG},${sB},0.30)`;
+    ctx.shadowBlur = maxHW * 0.55;
+    ctx.shadowOffsetY = maxHW * 0.16;
+    fillPoly(lX, lY, rX, rY, `rgba(${r},${g},${b},0.72)`);
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+  }
+
+  // ── Layer 2 · Edge darkening — thin strips along each outer edge ───────────
+  // Simulates the shadow where the stroke thins toward the edges.
+  {
+    const edgeFrac = 0.24;
+    const dR = Math.max(0, r - 16);
+    const dG = Math.max(0, g - 16);
+    const dB = Math.max(0, b - 16);
+
+    const ilX = new Float32Array(count);
+    const ilY = new Float32Array(count);
+    const irX = new Float32Array(count);
+    const irY = new Float32Array(count);
+    for (let i = 0; i < count; i++) {
+      const [nx, ny] = normals[i];
+      const innerHW = hwArr[i] * (1 - edgeFrac);
+      ilX[i] = spX[i] + nx * (innerHW + stroke.edgeNoiseL[i] * hwArr[i] * noiseAmp);
+      ilY[i] = spY[i] + ny * (innerHW + stroke.edgeNoiseL[i] * hwArr[i] * noiseAmp);
+      irX[i] = spX[i] - nx * (innerHW + stroke.edgeNoiseR[i] * hwArr[i] * noiseAmp);
+      irY[i] = spY[i] - ny * (innerHW + stroke.edgeNoiseR[i] * hwArr[i] * noiseAmp);
     }
+    fillPoly(lX, lY, ilX, ilY, `rgba(${dR},${dG},${dB},0.14)`);
+    fillPoly(irX, irY, rX, rY, `rgba(${dR},${dG},${dB},0.14)`);
+  }
+
+  // ── Layer 3 · Centre highlight ridge ──────────────────────────────────────
+  // A lighter-toned inner strip along the spine gives a raised, creamy appearance.
+  {
+    const cFrac = 0.30;
+    const hR = Math.min(255, r + 32);
+    const hG = Math.min(255, g + 26);
+    const hB = Math.min(255, b + 20);
+    const cLX = new Float32Array(count);
+    const cLY = new Float32Array(count);
+    const cRX = new Float32Array(count);
+    const cRY = new Float32Array(count);
+    for (let i = 0; i < count; i++) {
+      const [nx, ny] = normals[i];
+      const chw = hwArr[i] * cFrac;
+      cLX[i] = spX[i] + nx * chw;
+      cLY[i] = spY[i] + ny * chw;
+      cRX[i] = spX[i] - nx * chw;
+      cRY[i] = spY[i] - ny * chw;
+    }
+    fillPoly(cLX, cLY, cRX, cRY, `rgba(${hR},${hG},${hB},0.28)`);
+  }
+
+  // ── Layer 4 · Bristle texture lines ───────────────────────────────────────
+  // Thin polylines running along the stroke at various perpendicular offsets
+  // create the characteristic ridge pattern of a real foundation brush.
+  ctx.lineCap = 'round';
+  for (const bristle of stroke.bristles) {
+    ctx.beginPath();
+    for (let i = 0; i < count; i++) {
+      const [nx, ny] = normals[i];
+      const bx = spX[i] + nx * bristle.perpFrac * hwArr[i];
+      const by = spY[i] + ny * bristle.perpFrac * hwArr[i];
+      if (i === 0) ctx.moveTo(bx, by);
+      else ctx.lineTo(bx, by);
+    }
+    ctx.lineWidth = bristle.width;
+    ctx.strokeStyle = `rgba(${r},${g},${b},${bristle.opacity})`;
     ctx.stroke();
-    if (shadowColor) {
-      ctx.shadowColor = 'transparent';
-      ctx.shadowBlur = 0;
-      ctx.shadowOffsetY = 0;
-    }
   }
 
-  // Layer 1 · Outer soft feather halo (no shadow)
-  drawPath(toPx, sw * 2.8, `rgba(${r},${g},${b},0.10)`);
-
-  // Layer 2 · Main creamy body with a subtle drop-shadow beneath
-  drawPath(
-    toPx, sw, `rgba(${r},${g},${b},0.65)`,
-    `rgba(${Math.max(0, r - 50)},${Math.max(0, g - 50)},${Math.max(0, b - 50)},0.28)`,
-    sw * 0.35, sw * 0.18,
-  );
-
-  // Layer 3 · Slightly lighter inner core — gives a creamy raised appearance
-  drawPath(
-    toPx, sw * 0.30,
-    `rgba(${Math.min(255, r + 20)},${Math.min(255, g + 18)},${Math.min(255, b + 15)},0.22)`,
-  );
-
-  // Layer 4 · Bristle texture ridges (4 thin lines offset perpendicularly)
-  for (let bi = 0; bi < stroke.bristleOffsets.length; bi++) {
-    drawPath(
-      (i) => offsetPx(i, stroke.bristleOffsets[bi]),
-      sw * 0.09,
-      `rgba(${r},${g},${b},${stroke.bristleOpacities[bi]})`,
-    );
+  // ── Layer 5 · Shimmer highlight on the "lit" edge ─────────────────────────
+  // A bright, thin line along the left edge catches light like wet foundation.
+  {
+    const shR = Math.min(255, r + 68);
+    const shG = Math.min(255, g + 56);
+    const shB = Math.min(255, b + 46);
+    ctx.beginPath();
+    ctx.moveTo(lX[0], lY[0]);
+    for (let i = 1; i < count; i++) ctx.lineTo(lX[i], lY[i]);
+    ctx.lineWidth = 1.6;
+    ctx.strokeStyle = `rgba(${shR},${shG},${shB},0.50)`;
+    ctx.stroke();
   }
 
-  // Layer 5 · Shimmer highlight — catches light like wet foundation
-  const shR = Math.min(255, r + 52);
-  const shG = Math.min(255, g + 44);
-  const shB = Math.min(255, b + 38);
-  drawPath(
-    (i) => offsetPx(i, -0.30),
-    sw * 0.16,
-    `rgba(${shR},${shG},${shB},0.32)`,
-  );
-
-  // Layer 6 · Wet leading-edge blob (visible only mid-animation, fades near end)
-  if (progress < 0.97 && count >= 2) {
-    const [lx, ly] = toPx(count - 1);
-    const blobAlpha = BLOB_BASE_ALPHA * (1 - Math.pow(progress, BLOB_FADE_EXPONENT));
-    ctx.shadowColor = `rgba(${Math.max(0, r - 30)},${Math.max(0, g - 30)},${Math.max(0, b - 30)},0.3)`;
-    ctx.shadowBlur = sw * 0.5;
+  // ── Layer 6 · Wet leading-edge blob (mid-animation only) ──────────────────
+  // A small pool of foundation at the paint front, fading as progress reaches 1.
+  if (isLive && count >= 2) {
+    const tipHW = hwArr[count - 1];
+    const blobAlpha = BLOB_BASE_ALPHA * (1 - progress ** BLOB_FADE_EXP);
+    const sR = Math.max(0, r - 40);
+    const sG = Math.max(0, g - 40);
+    const sB = Math.max(0, b - 40);
+    ctx.shadowColor = `rgba(${sR},${sG},${sB},0.28)`;
+    ctx.shadowBlur = tipHW * 0.7;
     ctx.fillStyle = `rgba(${r},${g},${b},${blobAlpha})`;
     ctx.beginPath();
-    ctx.arc(lx, ly, sw * 0.52, 0, Math.PI * 2);
+    ctx.arc(spX[count - 1], spY[count - 1], tipHW * 0.85 + 1.5, 0, Math.PI * 2);
     ctx.fill();
     ctx.shadowBlur = 0;
     ctx.shadowColor = 'transparent';
@@ -307,7 +374,7 @@ function drawStrokeAtProgress(
   ctx.restore();
 }
 
-// ── Full scene draw (called every animation frame and on resize) ───────────────
+// ── Full scene ─────────────────────────────────────────────────────────────────
 function drawScene(
   ctx: CanvasRenderingContext2D,
   strokes: StrokeDef[],
@@ -371,7 +438,6 @@ export default function LiquidBrushStrokeCanvas() {
       const elapsed = (time - startTimeRef.current) / 1000;
 
       if (elapsed >= ANIMATION_END_TIME) {
-        // Clamp to end time so all strokes render at exactly progress=1
         renderFrame(ANIMATION_END_TIME);
         isDoneRef.current = true;
         rafRef.current = null;
@@ -385,7 +451,6 @@ export default function LiquidBrushStrokeCanvas() {
     setSize();
 
     if (reducedMotion) {
-      // Show the completed painting immediately
       renderFrame(ANIMATION_END_TIME);
     } else {
       rafRef.current = requestAnimationFrame(loop);
@@ -396,8 +461,8 @@ export default function LiquidBrushStrokeCanvas() {
       if (isDoneRef.current || reducedMotion) {
         renderFrame(ANIMATION_END_TIME);
       } else if (startTimeRef.current !== null) {
-        // Re-render current progress immediately to avoid a blank-canvas flash
-        // while the RAF loop is between ticks.
+        // Re-render at current progress to avoid a blank-canvas flash
+        // between setSize() clearing the canvas and the next RAF tick.
         const elapsed = (performance.now() - startTimeRef.current) / 1000;
         renderFrame(Math.min(elapsed, ANIMATION_END_TIME));
       }
