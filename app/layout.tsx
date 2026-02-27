@@ -10,19 +10,19 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: 'Chlo Beauty — Luxury Cosmetics',
+  title: 'Chlo — Luxury Cosmetics',
   description:
-    'Chlo Beauty offers a curated collection of luxury cosmetics — foundations, lashes, lip products and accessories crafted with clean formulas and effortless elegance.',
+    'Chlo offers a curated collection of luxury cosmetics — foundations, lashes, lip products and accessories crafted with clean formulas and effortless elegance.',
   metadataBase: new URL(siteUrl),
   alternates: {
     canonical: siteUrl,
   },
   openGraph: {
-    title: 'Chlo Beauty — Luxury Cosmetics',
+    title: 'Chlo — Luxury Cosmetics',
     description:
-      'Chlo Beauty offers a curated collection of luxury cosmetics — foundations, lashes, lip products and accessories crafted with clean formulas and effortless elegance.',
+      'Chlo offers a curated collection of luxury cosmetics — foundations, lashes, lip products and accessories crafted with clean formulas and effortless elegance.',
     url: siteUrl,
-    siteName: 'Chlo Beauty',
+    siteName: 'Chlo',
     type: 'website',
   },
   twitter: {
