@@ -1,7 +1,7 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import KintsugiGlassCanvas from './KintsugiGlassCanvas';
+import LiquidVelvetCanvas from './LiquidVelvetCanvas';
 
 export default function Hero() {
   const handleShopClick = () => {
@@ -24,7 +24,7 @@ export default function Hero() {
       style={{ backgroundColor: '#F7F1E7' }}
       aria-label="Hero"
     >
-      <KintsugiGlassCanvas />
+      <LiquidVelvetCanvas />
 
       <div className="relative z-10 flex flex-col items-center text-center px-6 max-w-3xl mx-auto">
         <motion.h1
