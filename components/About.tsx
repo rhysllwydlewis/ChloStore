@@ -12,7 +12,7 @@ const cards = [
   {
     label: 'Effortless Glam',
     description:
-      'Our products are designed to simplify your routine without compromising on results. Whether it\'s a bare-skin day or a full glam night, Chlo is with you every step.',
+      "Our products are designed to simplify your routine without compromising on results. Whether it's a bare-skin day or a full glam night, Chlo is with you every step.",
     delay: 0.15,
   },
   {
