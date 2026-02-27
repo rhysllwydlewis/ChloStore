@@ -4,21 +4,21 @@ import { motion } from 'framer-motion';
 
 const cards = [
   {
-    label: 'Craft',
+    label: 'Clean Formulas',
     description:
-      'Every brand within Chlo is built with intention. We believe that thoughtful design and careful execution are the foundations of lasting value.',
+      'Every Chlo product is crafted with thoughtfully sourced ingredients. We believe great beauty starts with what you put on your skin — so we keep it clean, effective, and kind.',
     delay: 0,
   },
   {
-    label: 'Care',
+    label: 'Effortless Glam',
     description:
-      'We take a hands-on approach to every collection, ensuring each product and experience meets the standard our customers expect and deserve.',
+      'Our products are designed to simplify your routine without compromising on results. Whether it\'s a bare-skin day or a full glam night, Chlo is with you every step.',
     delay: 0.15,
   },
   {
-    label: 'Continuity',
+    label: 'Cruelty Free',
     description:
-      'Chlo is built for the long term. We cultivate brands that grow gracefully, creating enduring connections with the people who matter most.',
+      'Beauty should never come at a cost to others. All Chlo products are 100% cruelty free — no animal testing, ever. Ethical beauty is the only beauty we believe in.',
     delay: 0.3,
   },
 ];
@@ -38,17 +38,18 @@ export default function About() {
           transition={{ duration: 0.8 }}
           className="max-w-2xl"
         >
-          <p className="text-xs uppercase tracking-[0.3em] text-chlo-muted mb-4">About</p>
+          <p className="text-xs uppercase tracking-[0.3em] text-chlo-muted mb-4">Our Story</p>
           <h2
             className="text-4xl md:text-5xl font-bold text-chlo-brown leading-tight"
             style={{ fontFamily: 'var(--font-playfair)' }}
           >
-            About Chlo
+            Beauty with purpose.
           </h2>
           <p className="text-base text-chlo-muted mt-6 leading-relaxed">
-            Chlo is a home for modern brands — a curated group of digital and lifestyle
-            experiences united by a commitment to quality, authenticity, and thoughtful
-            design. We believe that the best brands are built slowly, with care.
+            Chlo Beauty is a luxury cosmetics brand built on a simple belief: that
+            feeling beautiful should be effortless. We create clean, high-performance
+            formulas designed for real life — from everyday essentials to standout
+            glam. Every product is a small act of confidence.
           </p>
         </motion.div>
 

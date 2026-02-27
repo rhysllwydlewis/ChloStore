@@ -10,19 +10,19 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: 'Chlo - Curated Experiences',
+  title: 'Chlo Beauty — Luxury Cosmetics',
   description:
-    'Chlo brings together a growing collection of thoughtfully designed products and digital experiences. A home for modern brands.',
+    'Chlo Beauty offers a curated collection of luxury cosmetics — foundations, lashes, lip products and accessories crafted with clean formulas and effortless elegance.',
   metadataBase: new URL(siteUrl),
   alternates: {
     canonical: siteUrl,
   },
   openGraph: {
-    title: 'Chlo - Curated Experiences',
+    title: 'Chlo Beauty — Luxury Cosmetics',
     description:
-      'Chlo brings together a growing collection of thoughtfully designed products and digital experiences. A home for modern brands.',
+      'Chlo Beauty offers a curated collection of luxury cosmetics — foundations, lashes, lip products and accessories crafted with clean formulas and effortless elegance.',
     url: siteUrl,
-    siteName: 'Chlo',
+    siteName: 'Chlo Beauty',
     type: 'website',
   },
   twitter: {

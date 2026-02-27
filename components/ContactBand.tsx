@@ -22,11 +22,11 @@ export default function ContactBand() {
             className="text-3xl md:text-4xl font-bold text-chlo-brown"
             style={{ fontFamily: 'var(--font-playfair)' }}
           >
-            Interested in partnering with Chlo?
+            Have a question about our products?
           </h2>
           <p className="text-chlo-muted mt-4 max-w-xl mx-auto leading-relaxed">
-            Whether you have a brand concept, a product, or simply an idea —
-            we&apos;d love to hear from you.
+            Whether you need skincare advice, want to explore wholesale opportunities,
+            or simply want to say hello — we&apos;d love to hear from you.
           </p>
           <button
             type="button"

@@ -5,8 +5,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useContact } from '@/components/ContactWidget';
 
 const navLinks = [
+  { label: 'Shop', href: '#shop' },
   { label: 'About', href: '#about' },
-  { label: 'Collections', href: '#collections' },
 ];
 
 export default function Navbar() {

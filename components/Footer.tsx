@@ -18,7 +18,7 @@ export default function Footer() {
       style={{ backgroundColor: '#FFFCF7', borderTop: '1px solid #E7D8C6' }}
     >
       <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-        <p className="text-sm text-chlo-muted">© {year} Chlo. All rights reserved.</p>
+        <p className="text-sm text-chlo-muted">© {year} Chlo Beauty. All rights reserved.</p>
         <div className="flex items-center gap-6 text-sm">
           <Link
             href="/legal"
