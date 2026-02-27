@@ -370,16 +370,15 @@ export default function LiquidBrushStrokeCanvas() {
       if (startTimeRef.current === null) startTimeRef.current = time;
       const elapsed = (time - startTimeRef.current) / 1000;
 
-      renderFrame(elapsed);
-
       if (elapsed >= ANIMATION_END_TIME) {
-        // Draw the final completed state and stop the loop
+        // Clamp to end time so all strokes render at exactly progress=1
         renderFrame(ANIMATION_END_TIME);
         isDoneRef.current = true;
         rafRef.current = null;
         return;
       }
 
+      renderFrame(elapsed);
       rafRef.current = requestAnimationFrame(loop);
     }
 
@@ -396,6 +395,11 @@ export default function LiquidBrushStrokeCanvas() {
       setSize();
       if (isDoneRef.current || reducedMotion) {
         renderFrame(ANIMATION_END_TIME);
+      } else if (startTimeRef.current !== null) {
+        // Re-render current progress immediately to avoid a blank-canvas flash
+        // while the RAF loop is between ticks.
+        const elapsed = (performance.now() - startTimeRef.current) / 1000;
+        renderFrame(Math.min(elapsed, ANIMATION_END_TIME));
       }
     });
     resizeObserver.observe(container);
@@ -414,6 +418,7 @@ export default function LiquidBrushStrokeCanvas() {
       ref={containerRef}
       className="absolute inset-0 overflow-hidden pointer-events-none"
       aria-hidden="true"
+      style={{ willChange: 'transform' }}
     >
       <canvas ref={canvasRef} className="absolute inset-0" />
     </div>
