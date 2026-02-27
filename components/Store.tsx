@@ -52,8 +52,8 @@ const products: Product[] = [
     category: 'Lashes',
     description: 'Full volume, full glam. For nights that matter.',
     price: '£16.00',
-    emoji: '🖤',
-    gradient: 'from-chlo-beige to-chlo-muted',
+    emoji: '💫',
+    gradient: 'from-chlo-tan to-chlo-beige',
   },
   {
     name: 'Chlo Magnetic Lash Kit',
@@ -69,7 +69,7 @@ const products: Product[] = [
     description: 'Long-lasting colour with a velvet-soft finish.',
     price: '£18.00',
     emoji: '💄',
-    gradient: 'from-chlo-tan to-chlo-brown',
+    gradient: 'from-chlo-beige to-chlo-tan',
   },
   {
     name: 'Chlo Glass Lip Gloss',

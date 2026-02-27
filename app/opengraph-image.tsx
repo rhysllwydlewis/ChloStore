@@ -1,7 +1,7 @@
 import { ImageResponse } from 'next/og';
 
 export const runtime = 'edge';
-export const alt = 'Chlo - Curated Experiences';
+export const alt = 'Chlo Beauty — Luxury Cosmetics';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 
@@ -50,7 +50,7 @@ export default function OgImage() {
               marginBottom: '24px',
             }}
           >
-            chlo.co.uk
+            chlo beauty
           </p>
           <h1
             style={{
@@ -72,7 +72,7 @@ export default function OgImage() {
               maxWidth: '700px',
             }}
           >
-            Curated experiences for modern living
+          Effortless beauty, elevated.
           </p>
         </div>
 

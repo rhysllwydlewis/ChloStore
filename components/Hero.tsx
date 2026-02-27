@@ -3,7 +3,8 @@
 import { motion } from 'framer-motion';
 import KintsugiGlassCanvas from './KintsugiGlassCanvas';
 
-export default function Hero() {  const handleShopClick = () => {
+export default function Hero() {
+  const handleShopClick = () => {
     const target = document.querySelector('#shop');
     if (target) {
       target.scrollIntoView({ behavior: 'smooth' });

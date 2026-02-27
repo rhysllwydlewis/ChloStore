@@ -259,8 +259,10 @@ function ContactModal({ onClose }: { onClose: () => void }) {
                     onChange={(e) => setFormData({ ...formData, subject: e.target.value })}
                     className={`${errors.subject ? errorInputClass : inputClass} appearance-none pr-10`}
                   >
-                    <option value="General">General</option>
-                    <option value="Partnership">Partnership</option>
+                    <option value="General">General Enquiry</option>
+                    <option value="Product">Product Question</option>
+                    <option value="Order">Order Help</option>
+                    <option value="Wholesale">Wholesale</option>
                     <option value="Press">Press</option>
                     <option value="Other">Other</option>
                   </select>
