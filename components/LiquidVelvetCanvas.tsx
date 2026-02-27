@@ -14,6 +14,12 @@ const STROKE_SWAY_SPEED = 0.18;
 const BLOB_PULSE_SPEED = 0.22;
 // Particle drift speed (canvas-heights per second)
 const PARTICLE_SPEED = 0.025;
+// Mobile beauty-light sway parameters
+const MOBILE_SWAY_IDLE_MS = 2000;      // ms of no-touch before sway takes over
+const MOBILE_SWAY_FREQ_X = 0.35;       // horizontal oscillation frequency (Hz)
+const MOBILE_SWAY_FREQ_Y = 0.22;       // vertical oscillation frequency (Hz)
+const MOBILE_SWAY_AMP_X = 0.06;        // horizontal amplitude (fraction of canvas width)
+const MOBILE_SWAY_AMP_Y = 0.04;        // vertical amplitude (fraction of canvas height)
 
 // ── Seeded PRNG (mulberry32) ──────────────────────────────────────────────────
 function mulberry32(a: number): () => number {
@@ -219,15 +225,21 @@ function drawScene(
 
     const bw = s.baseWidth * w;
 
-    // Draw 3 overlapping passes (thick → thin tapering effect)
-    for (let pass = 0; pass < 3; pass++) {
-      const offY = (pass - 1) * bw * 0.25;
-      ctx.lineWidth = bw * (1 - pass * 0.28);
-      ctx.strokeStyle = s.colour;
-      ctx.globalAlpha = 1 - pass * 0.25;
+    // Feathered brush stroke: three passes on the same path with decreasing
+    // width and varying alpha — creates a soft outer halo fading into a denser
+    // core, giving the look of a real foundation swatch.
+    ctx.strokeStyle = s.colour;
+    const strokePasses: [number, number][] = [
+      [bw * 2.0, 0.28],  // wide soft halo
+      [bw * 1.1, 0.55],  // medium body
+      [bw * 0.35, 0.30], // narrow crisp inner highlight
+    ];
+    for (const [lw, ga] of strokePasses) {
+      ctx.lineWidth = lw;
+      ctx.globalAlpha = ga;
       ctx.beginPath();
-      ctx.moveTo(p0x, p0y + offY);
-      ctx.bezierCurveTo(cp1x, cp1y + offY, cp2x, cp2y + offY, p3x, p3y + offY);
+      ctx.moveTo(p0x, p0y);
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p3x, p3y);
       ctx.stroke();
     }
   }
@@ -310,6 +322,7 @@ export default function LiquidVelvetCanvas() {
   const lastDrawTimeRef = useRef<number | null>(null);
   const lastDrawElapsedRef = useRef(0);
   const lastDrawPtrRef = useRef({ x: 0, y: 0 });
+  const lastTouchTimeRef = useRef<number | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -353,7 +366,8 @@ export default function LiquidVelvetCanvas() {
 
     function startLoop() {
       if (rafRef.current !== null) return;
-      startTimeRef.current = null;
+      // Preserve startTimeRef so elapsed continues from where it was — avoids
+      // particles snapping to their initial positions when the user scrolls back.
       lastTimeRef.current = null;
       rafRef.current = requestAnimationFrame(loop);
     }
@@ -375,6 +389,18 @@ export default function LiquidVelvetCanvas() {
 
       const sp = smoothPtrRef.current;
       const tp = ptrRef.current;
+
+      // Mobile sway: when no touch has happened recently, gently oscillate the
+      // beauty-light target around centre (spec: "center it and gently sway").
+      if (isMobile) {
+        const { w: sw, h: sh } = sizeRef.current;
+        const lastTouch = lastTouchTimeRef.current;
+        if (lastTouch === null || time - lastTouch > MOBILE_SWAY_IDLE_MS) {
+          tp.x = sw / 2 + Math.sin(elapsed * MOBILE_SWAY_FREQ_X) * sw * MOBILE_SWAY_AMP_X;
+          tp.y = sh / 2 + Math.cos(elapsed * MOBILE_SWAY_FREQ_Y) * sh * MOBILE_SWAY_AMP_Y;
+        }
+      }
+
       sp.x += (tp.x - sp.x) * alpha;
       sp.y += (tp.y - sp.y) * alpha;
 
@@ -432,6 +458,7 @@ export default function LiquidVelvetCanvas() {
           x: clamp(e.touches[0].clientX - rect.left, 0, rect.width),
           y: clamp(e.touches[0].clientY - rect.top, 0, rect.height),
         };
+        lastTouchTimeRef.current = performance.now();
       }
     }
     if (!reducedMotionRef.current) {
