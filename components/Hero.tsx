@@ -2,13 +2,17 @@
 
 import { motion } from 'framer-motion';
 import KintsugiGlassCanvas from './KintsugiGlassCanvas';
-import { useContact } from '@/components/ContactWidget';
 
 export default function Hero() {
-  const { openContact } = useContact();
+  const handleShopClick = () => {
+    const target = document.querySelector('#shop');
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
 
-  const handleExploreClick = () => {
-    const target = document.querySelector('#collections');
+  const handleAboutClick = () => {
+    const target = document.querySelector('#about');
     if (target) {
       target.scrollIntoView({ behavior: 'smooth' });
     }
@@ -40,7 +44,7 @@ export default function Hero() {
           className="text-xl md:text-2xl text-chlo-muted font-light mt-8 tracking-wide"
           style={{ fontFamily: 'var(--font-playfair)', fontStyle: 'italic' }}
         >
-          Curated experiences, crafted with care.
+          Effortless beauty, elevated.
         </motion.p>
 
         <motion.p
@@ -49,8 +53,8 @@ export default function Hero() {
           transition={{ duration: 0.9, delay: 0.75 }}
           className="text-base text-chlo-muted mt-5 max-w-lg leading-relaxed"
         >
-          Chlo brings together a growing collection of thoughtfully designed
-          products and digital experiences.
+          Luxury cosmetics crafted with clean formulas and a passion for confidence.
+          Discover beauty that feels as good as it looks.
         </motion.p>
 
         <motion.div
@@ -61,26 +65,26 @@ export default function Hero() {
         >
           <button
             type="button"
-            onClick={openContact}
+            onClick={handleShopClick}
             className="px-8 py-3.5 rounded-full text-sm font-medium tracking-wide transition-all duration-200 hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-chlo-brown focus-visible:ring-offset-2 focus-visible:ring-offset-chlo-cream"
             style={{ backgroundColor: '#3B2F2A', color: '#FFFCF7' }}
           >
-            Contact
+            Shop Now
           </button>
           <button
             type="button"
-            onClick={handleExploreClick}
+            onClick={handleAboutClick}
             className="px-8 py-3.5 rounded-full text-sm font-medium tracking-wide border transition-all duration-200 hover:bg-chlo-beige focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-chlo-brown focus-visible:ring-offset-2 focus-visible:ring-offset-chlo-cream"
             style={{ borderColor: '#3B2F2A', color: '#3B2F2A' }}
           >
-            Explore
+            Our Story
           </button>
         </motion.div>
       </div>
 
       <motion.button
         type="button"
-        onClick={handleExploreClick}
+        onClick={handleShopClick}
         initial={{ opacity: 0 }}
         animate={{ opacity: 0.4 }}
         transition={{ duration: 1, delay: 1.8 }}
