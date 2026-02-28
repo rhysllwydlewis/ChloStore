@@ -51,8 +51,6 @@ function computeNormals(pts: [number, number][], w: number, h: number): [number,
 function easeOutCubic(t: number): number { return 1 - (1 - t) ** 3; }
 
 // ── Width profile along the drawn stroke ──────────────────────────────────────
-// Returns a [0,1] multiplier at normalised position t along the drawn portion.
-// isLive: stroke is still animating (tip kept slightly fatter for wet-bead look)
 function widthProfile(t: number, isLive: boolean): number {
   const entry = t < 0.04 ? (t / 0.04) ** 0.55 : 1.0;
   const exitLen = isLive ? 0.07 : 0.20;
@@ -79,70 +77,69 @@ function bakeNoise(n: number, rng: () => number, step = 8): Float32Array {
 
 // ── Hex → RGB ──────────────────────────────────────────────────────────────────
 function toRgb(hex: string): [number, number, number] {
-  return [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)];
+  return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
 }
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface Bristle {
-  frac: number;      // perpendicular offset as fraction of hw, in [-1, 1]
+  frac: number;
   alpha: number;
-  lw: number;        // line-width in px
-  isRidge: boolean;  // true = bright ridge, false = dark valley
+  lw: number;
+  isRidge: boolean;
 }
 
 interface Stroke {
   r: number; g: number; b: number;
   pts: [number, number][];
-  maxHW: number;         // max half-width as fraction of canvas width
-  t0: number;            // animation start (s)
-  dt: number;            // animation duration (s)
+  maxHW: number;
+  t0: number;
+  dt: number;
   noiseL: Float32Array;
   noiseR: Float32Array;
   bristles: Bristle[];
-  specFrac: number;      // lateral position of specular, fraction of hw (negative = left/lit side)
+  specFrac: number;
 }
 
+// ── Props ─────────────────────────────────────────────────────────────────────
+type Props = {
+  /** Path to a photoreal brush texture in /public. Example: "/brush-texture.webp" */
+  textureSrc?: string;
+  /** 0..1 — strength of the texture projection */
+  textureStrength?: number;
+  /** Background fill for the canvas */
+  background?: string;
+};
+
 // ── Constants ─────────────────────────────────────────────────────────────────
-const N_PTS = 200;      // bezier sample count — more = smoother polygon edges
-const ANIM_END = 4.4;   // total animation duration (s)
-const NOISE_AMP = 0.11; // edge noise amplitude relative to local hw
-// Blob alpha multipliers — control how much brighter/darker the highlight and
-// meniscus rim appear relative to the base blob alpha.
-const BLOB_HIGHLIGHT_FACTOR = 1.18;  // inner highlight: slightly over-exposed
-const BLOB_MENISCUS_FACTOR  = 0.82;  // outer meniscus rim: slightly under-exposed
+const N_PTS = 200;
+const ANIM_END = 4.4;
+const NOISE_AMP = 0.11;
+
+// Blob + highlight tuning
+const BLOB_HIGHLIGHT_FACTOR = 1.18;
+const BLOB_MENISCUS_FACTOR = 0.82;
 
 // ── Build stroke data (deterministic via PRNG seed) ───────────────────────────
 function buildStrokes(): Stroke[] {
   const rng = mulberry32(0xd3a7f1c9);
 
-  // Slightly more saturated warm-beige/tan palette — real liquid foundation tones.
   const defs = [
-    // 1 · Grand diagonal arc, bottom-left → upper-right
-    { hex:'#C8956A', p0x:-0.03, p0y:0.86, c1x:0.12, c1y:0.26, c2x:0.52, c2y:0.04, p3x:1.03, p3y:0.18, hw:0.050, t0:0.00, dt:1.10 },
-    // 2 · Wavy S-curve across the middle
-    { hex:'#BE8A5E', p0x:-0.03, p0y:0.52, c1x:0.28, c1y:0.18, c2x:0.64, c2y:0.80, p3x:1.03, p3y:0.44, hw:0.042, t0:0.38, dt:1.00 },
-    // 3 · Upper diagonal, left → centre-right
-    { hex:'#D9BEA0', p0x: 0.04, p0y:0.06, c1x:0.26, c1y:0.00, c2x:0.50, c2y:0.18, p3x:0.88, p3y:0.42, hw:0.036, t0:0.76, dt:0.90 },
-    // 4 · Lower broad base sweep
-    { hex:'#AD7A52', p0x:-0.03, p0y:0.88, c1x:0.26, c1y:0.96, c2x:0.64, c2y:0.76, p3x:1.03, p3y:0.72, hw:0.046, t0:1.12, dt:0.94 },
-    // 5 · Top-right corner accent
-    { hex:'#D0B296', p0x: 0.54, p0y:0.00, c1x:0.74, c1y:0.04, c2x:0.88, c2y:0.22, p3x:1.03, p3y:0.48, hw:0.033, t0:1.50, dt:0.78 },
-    // 6 · Left-side descending stroke
-    { hex:'#BC8A62', p0x: 0.00, p0y:0.10, c1x:0.04, c1y:0.36, c2x:0.12, c2y:0.62, p3x:0.28, p3y:1.02, hw:0.034, t0:1.82, dt:0.84 },
-    // 7 · Bottom anchoring sweep
-    { hex:'#C8956A', p0x: 0.14, p0y:1.03, c1x:0.40, c1y:0.82, c2x:0.70, c2y:0.94, p3x:1.03, p3y:0.96, hw:0.040, t0:2.12, dt:0.88 },
-    // 8 · Mid-canvas accent
-    { hex:'#BE8A5E', p0x: 0.30, p0y:0.30, c1x:0.46, c1y:0.12, c2x:0.66, c2y:0.28, p3x:0.82, p3y:0.54, hw:0.029, t0:2.42, dt:0.72 },
+    { hex: '#C8956A', p0x: -0.03, p0y: 0.86, c1x: 0.12, c1y: 0.26, c2x: 0.52, c2y: 0.04, p3x: 1.03, p3y: 0.18, hw: 0.050, t0: 0.00, dt: 1.10 },
+    { hex: '#BE8A5E', p0x: -0.03, p0y: 0.52, c1x: 0.28, c1y: 0.18, c2x: 0.64, c2y: 0.80, p3x: 1.03, p3y: 0.44, hw: 0.042, t0: 0.38, dt: 1.00 },
+    { hex: '#D9BEA0', p0x: 0.04, p0y: 0.06, c1x: 0.26, c1y: 0.00, c2x: 0.50, c2y: 0.18, p3x: 0.88, p3y: 0.42, hw: 0.036, t0: 0.76, dt: 0.90 },
+    { hex: '#AD7A52', p0x: -0.03, p0y: 0.88, c1x: 0.26, c1y: 0.96, c2x: 0.64, c2y: 0.76, p3x: 1.03, p3y: 0.72, hw: 0.046, t0: 1.12, dt: 0.94 },
+    { hex: '#D0B296', p0x: 0.54, p0y: 0.00, c1x: 0.74, c1y: 0.04, c2x: 0.88, c2y: 0.22, p3x: 1.03, p3y: 0.48, hw: 0.033, t0: 1.50, dt: 0.78 },
+    { hex: '#BC8A62', p0x: 0.00, p0y: 0.10, c1x: 0.04, c1y: 0.36, c2x: 0.12, c2y: 0.62, p3x: 0.28, p3y: 1.02, hw: 0.034, t0: 1.82, dt: 0.84 },
+    { hex: '#C8956A', p0x: 0.14, p0y: 1.03, c1x: 0.40, c1y: 0.82, c2x: 0.70, c2y: 0.94, p3x: 1.03, p3y: 0.96, hw: 0.040, t0: 2.12, dt: 0.88 },
+    { hex: '#BE8A5E', p0x: 0.30, p0y: 0.30, c1x: 0.46, c1y: 0.12, c2x: 0.66, c2y: 0.28, p3x: 0.82, p3y: 0.54, hw: 0.029, t0: 2.42, dt: 0.72 },
   ];
 
-  return defs.map(d => {
+  return defs.map((d) => {
     const [r, g, b] = toRgb(d.hex);
-    const pts = sampleBezier(d.p0x,d.p0y, d.c1x,d.c1y, d.c2x,d.c2y, d.p3x,d.p3y, N_PTS);
+    const pts = sampleBezier(d.p0x, d.p0y, d.c1x, d.c1y, d.c2x, d.c2y, d.p3x, d.p3y, N_PTS);
     const noiseL = bakeNoise(N_PTS + 1, rng, 7);
     const noiseR = bakeNoise(N_PTS + 1, rng, 7);
 
-    // 28–38 bristle lines — roughly equal split between light ridges and dark valleys.
-    // Ridges: slightly brighter, alpha 0.06–0.16.  Valleys: slightly darker, alpha 0.04–0.10.
     const bCount = 28 + Math.floor(rng() * 11);
     const bristles: Bristle[] = Array.from({ length: bCount }, () => {
       const isRidge = rng() > 0.40;
@@ -158,52 +155,136 @@ function buildStrokes(): Stroke[] {
       r, g, b, pts,
       maxHW: d.hw, t0: d.t0, dt: d.dt,
       noiseL, noiseR, bristles,
-      // Specular sits on the "lit" side: ~-34% to -44% of hw from spine centre.
       specFrac: -(0.34 + rng() * 0.10),
     };
   });
 }
 
-// ── Render one stroke at eased progress [0, 1] ────────────────────────────────
+function clamp(n: number, a: number, b: number) { return Math.max(a, Math.min(b, n)); }
+
+function buildStrokeClipPath(
+  aX: Float32Array, aY: Float32Array,
+  bX: Float32Array, bY: Float32Array,
+  count: number,
+): Path2D {
+  const p = new Path2D();
+  p.moveTo(aX[0], aY[0]);
+  for (let i = 1; i < count; i++) p.lineTo(aX[i], aY[i]);
+  for (let i = count - 1; i >= 0; i--) p.lineTo(bX[i], bY[i]);
+  p.closePath();
+  return p;
+}
+
+function drawTextureProjected(
+  ctx: CanvasRenderingContext2D,
+  texture: HTMLImageElement,
+  clipPath: Path2D,
+  bbox: { minX: number; minY: number; maxX: number; maxY: number },
+  angle: number,
+  strength: number,
+) {
+  if (!texture.complete || texture.naturalWidth === 0) return;
+
+  const w = bbox.maxX - bbox.minX;
+  const h = bbox.maxY - bbox.minY;
+  if (w < 2 || h < 2) return;
+
+  const cx = (bbox.minX + bbox.maxX) * 0.5;
+  const cy = (bbox.minY + bbox.maxY) * 0.5;
+
+  ctx.save();
+  ctx.clip(clipPath);
+
+  // Make sure we fully cover even after rotation
+  const cover = Math.hypot(w, h) * 1.25;
+  const aspect = texture.naturalWidth / texture.naturalHeight;
+
+  let dw = cover;
+  let dh = cover / aspect;
+  if (dh < cover) { dh = cover; dw = cover * aspect; }
+
+  ctx.translate(cx, cy);
+  ctx.rotate(angle);
+
+  // PASS 1: Multiply (adds realistic density/grooves)
+  ctx.globalCompositeOperation = 'multiply';
+  ctx.globalAlpha = clamp(0.12 + strength * 0.25, 0, 0.60);
+  ctx.filter = 'contrast(110%) saturate(106%)';
+  ctx.drawImage(texture, -dw / 2, -dh / 2, dw, dh);
+
+  // PASS 2: Soft-light (adds subtle fiber + sheen variation)
+  ctx.globalCompositeOperation = 'soft-light';
+  ctx.globalAlpha = clamp(0.06 + strength * 0.17, 0, 0.42);
+  ctx.filter = 'contrast(104%) saturate(112%)';
+  ctx.drawImage(texture, -dw / 2 + dw * 0.05, -dh / 2 - dh * 0.02, dw * 0.98, dh * 0.98);
+
+  // PASS 3: Overlay (tiny micro-contrast, helps photoreal feel)
+  ctx.globalCompositeOperation = 'overlay';
+  ctx.globalAlpha = clamp(0.02 + strength * 0.08, 0, 0.22);
+  ctx.filter = 'contrast(112%) saturate(102%)';
+  ctx.drawImage(texture, -dw / 2 - dw * 0.02, -dh / 2 + dh * 0.03, dw, dh);
+
+  ctx.filter = 'none';
+  ctx.restore();
+}
+
 function renderStroke(
   ctx: CanvasRenderingContext2D,
   s: Stroke,
   progress: number,
   cw: number,
   ch: number,
+  texture: HTMLImageElement | null,
+  textureStrength: number,
 ) {
-  const nPts  = s.pts.length;
+  const nPts = s.pts.length;
   const count = Math.max(3, Math.round(progress * (nPts - 1)) + 1);
   const { r, g, b } = s;
-  const nrm = computeNormals(s.pts.slice(0, count), cw, ch);
+
+  const pts = s.pts.slice(0, count);
+  const nrm = computeNormals(pts, cw, ch);
+
   const isLive = progress < 0.96;
   const maxHW = s.maxHW * cw;
 
-  // ── Pre-compute geometry arrays ──────────────────────────────────────────────
   const spX = new Float32Array(count);
   const spY = new Float32Array(count);
   const hwA = new Float32Array(count);
-  const lX  = new Float32Array(count);
-  const lY  = new Float32Array(count);
-  const rX  = new Float32Array(count);
-  const rY  = new Float32Array(count);
+  const lX = new Float32Array(count);
+  const lY = new Float32Array(count);
+  const rX = new Float32Array(count);
+  const rY = new Float32Array(count);
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
   for (let i = 0; i < count; i++) {
     const t = count < 2 ? 0 : i / (count - 1);
     const hw = maxHW * widthProfile(t, isLive);
     hwA[i] = hw;
-    spX[i] = s.pts[i][0] * cw;
-    spY[i] = s.pts[i][1] * ch;
+
+    spX[i] = pts[i][0] * cw;
+    spY[i] = pts[i][1] * ch;
+
     const [nx, ny] = nrm[i];
     const nL = s.noiseL[i] * hw * NOISE_AMP;
     const nR = s.noiseR[i] * hw * NOISE_AMP;
+
     lX[i] = spX[i] + nx * (hw + nL);
     lY[i] = spY[i] + ny * (hw + nL);
     rX[i] = spX[i] - nx * (hw + nR);
     rY[i] = spY[i] - ny * (hw + nR);
+
+    minX = Math.min(minX, lX[i], rX[i]);
+    minY = Math.min(minY, lY[i], rY[i]);
+    maxX = Math.max(maxX, lX[i], rX[i]);
+    maxY = Math.max(maxY, lY[i], rY[i]);
   }
 
-  // Fill a closed polygon between two parallel edge arrays.
+  // Stroke direction angle for texture projection
+  const dx = spX[count - 1] - spX[0];
+  const dy = spY[count - 1] - spY[0];
+  const angle = Math.atan2(dy, dx);
+
   const fillBetween = (
     aX: Float32Array, aY: Float32Array,
     bX: Float32Array, bY: Float32Array,
@@ -218,7 +299,6 @@ function renderStroke(
     ctx.fill();
   };
 
-  // Smooth inner-edge array at given fraction of hw from spine (positive = left).
   const makeInner = (frac: number): [Float32Array, Float32Array] => {
     const ex = new Float32Array(count);
     const ey = new Float32Array(count);
@@ -232,19 +312,19 @@ function renderStroke(
 
   ctx.save();
 
-  // ── A · Soft drop-shadow beneath the stroke ────────────────────────────────
-  // Canvas native shadowBlur on a near-invisible fill → realistic soft depth.
-  ctx.shadowColor   = `rgba(${Math.max(0,r-70)},${Math.max(0,g-64)},${Math.max(0,b-56)},0.32)`;
-  ctx.shadowBlur    = maxHW * 0.72;
+  // A · Soft drop-shadow under the body
+  ctx.shadowColor = `rgba(${Math.max(0, r - 70)},${Math.max(0, g - 64)},${Math.max(0, b - 56)},0.32)`;
+  ctx.shadowBlur = maxHW * 0.72;
   ctx.shadowOffsetY = maxHW * 0.14;
   fillBetween(lX, lY, rX, rY, `rgba(${r},${g},${b},0.01)`);
-  ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
 
-  // ── B · Main semi-transparent foundation body ──────────────────────────────
-  // 0.74 opacity: you can slightly see the cream background — the "glass" look.
-  fillBetween(lX, lY, rX, rY, `rgba(${r},${g},${b},0.74)`);
+  // B · Main semi-transparent foundation body
+  fillBetween(lX, lY, rX, rY, `rgba(${r},${g},${b},0.78)`);
 
-  // ── C · Volumetric depth — the centre is thicker so slightly more opaque ──
+  // C · Volumetric depth
   {
     const [iLX, iLY] = makeInner(0.62);
     const [iRX, iRY] = makeInner(-0.62);
@@ -256,9 +336,20 @@ function renderStroke(
     fillBetween(iLX, iLY, iRX, iRY, `rgba(${r},${g},${b},0.07)`);
   }
 
-  // ── D · Surface-tension meniscus bead at each edge ────────────────────────
-  // This darker outer strip is the single most distinctive visual property
-  // of a liquid sitting on glass — surface tension thickens the edge.
+  // Photoreal texture projection clipped to the stroke shape
+  if (texture && textureStrength > 0.001) {
+    const clipPath = buildStrokeClipPath(lX, lY, rX, rY, count);
+    drawTextureProjected(
+      ctx,
+      texture,
+      clipPath,
+      { minX, minY, maxX, maxY },
+      angle,
+      textureStrength,
+    );
+  }
+
+  // D · Surface-tension meniscus bead at each edge
   {
     const dr = Math.max(0, r - 32);
     const dg = Math.max(0, g - 26);
@@ -269,9 +360,7 @@ function renderStroke(
     fillBetween(iRX, iRY, rX, rY, `rgba(${dr},${dg},${db},0.30)`);
   }
 
-  // ── E · Bristle micro-texture (foundation brush ridge/valley pattern) ──────
-  // Light lines = raised bristle ridges   Dark lines = recessed bristle valleys
-  // The combination creates the characteristic tactile look of foundation.
+  // E · Procedural bristle micro-lines (reduced so the real texture dominates)
   ctx.lineCap = 'round';
   for (const br of s.bristles) {
     const tr = br.isRidge ? Math.min(255, r + 28) : Math.max(0, r - 24);
@@ -282,70 +371,51 @@ function renderStroke(
       const [nx, ny] = nrm[i];
       const bx = spX[i] + nx * br.frac * hwA[i];
       const by = spY[i] + ny * br.frac * hwA[i];
-      if (i === 0) {
-        ctx.moveTo(bx, by);
-      } else {
-        ctx.lineTo(bx, by);
-      }
+      if (i === 0) ctx.moveTo(bx, by);
+      else ctx.lineTo(bx, by);
     }
-    ctx.lineWidth   = br.lw;
-    ctx.strokeStyle = `rgba(${tr},${tg},${tb},${br.alpha})`;
+    ctx.lineWidth = br.lw;
+    ctx.strokeStyle = `rgba(${tr},${tg},${tb},${br.alpha * 0.72})`;
     ctx.stroke();
   }
 
-  // ── F · Specular highlights — 'screen' blend for physically accurate gloss ─
-  // The 'screen' composite operation models how light actually reflects off a
-  // wet glossy surface: it brightens the destination without clamping.
-  // This is the single technique that makes liquid look genuinely photorealistic.
+  // F · Specular highlights — 'screen' blend
   ctx.globalCompositeOperation = 'screen';
 
-  // Secondary halo — broad, soft, low opacity
   ctx.beginPath();
   for (let i = 0; i < count; i++) {
     const [nx, ny] = nrm[i];
     const ox = spX[i] + nx * s.specFrac * hwA[i] * 0.80;
     const oy = spY[i] + ny * s.specFrac * hwA[i] * 0.80;
-    if (i === 0) {
-      ctx.moveTo(ox, oy);
-    } else {
-      ctx.lineTo(ox, oy);
-    }
+    if (i === 0) ctx.moveTo(ox, oy);
+    else ctx.lineTo(ox, oy);
   }
-  ctx.lineWidth   = 6.0;
+  ctx.lineWidth = 6.0;
   ctx.strokeStyle = 'rgba(255, 244, 228, 0.16)';
   ctx.stroke();
 
-  // Primary specular — narrow, sharp, bright: the "wet glint"
   ctx.beginPath();
   for (let i = 0; i < count; i++) {
     const [nx, ny] = nrm[i];
     const ox = spX[i] + nx * s.specFrac * hwA[i];
     const oy = spY[i] + ny * s.specFrac * hwA[i];
-    if (i === 0) {
-      ctx.moveTo(ox, oy);
-    } else {
-      ctx.lineTo(ox, oy);
-    }
+    if (i === 0) ctx.moveTo(ox, oy);
+    else ctx.lineTo(ox, oy);
   }
-  ctx.lineWidth   = 1.7;
+  ctx.lineWidth = 1.7;
   ctx.strokeStyle = 'rgba(255, 252, 248, 0.86)';
   ctx.stroke();
 
   ctx.globalCompositeOperation = 'source-over';
 
-  // ── G · Animated wet blob at the leading edge ──────────────────────────────
-  // Models the bead of fresh, viscous liquid at the brush tip.
-  // Uses a radial gradient: lighter highlight centre → foundation colour → dark
-  // meniscus rim → transparent, exactly as a droplet looks under studio light.
+  // G · Animated wet blob at the leading edge
   if (isLive && count >= 2) {
-    const tx  = spX[count - 1];
-    const ty  = spY[count - 1];
+    const tx = spX[count - 1];
+    const ty = spY[count - 1];
     const tHW = hwA[count - 1];
-    // Blob alpha fades from strong at start to gone as stroke nears completion.
     const blobA = 0.64 * Math.max(0, 1 - (progress / 0.92) ** 2.4);
 
     if (blobA > 0.015) {
-      // Highlight is offset toward upper-left of the blob (simulated key light).
       const hlX = tx - tHW * 0.24;
       const hlY = ty - tHW * 0.24;
       const grad = ctx.createRadialGradient(hlX, hlY, tHW * 0.04, tx, ty, tHW * 1.20);
@@ -355,19 +425,22 @@ function renderStroke(
       grad.addColorStop(1.00, `rgba(${r},${g},${b},0)`);
 
       ctx.shadowColor = `rgba(${Math.max(0, r - 65)},${Math.max(0, g - 58)},${Math.max(0, b - 50)},0.30)`;
-      ctx.shadowBlur  = tHW * 1.0;
-      ctx.fillStyle   = grad;
+      ctx.shadowBlur = tHW * 1.0;
+
+      ctx.fillStyle = grad;
       ctx.beginPath();
       ctx.arc(tx, ty, tHW * 1.20, 0, Math.PI * 2);
       ctx.fill();
-      ctx.shadowBlur = 0; ctx.shadowColor = 'transparent';
 
-      // Tiny screen-blend specular dot on the blob surface — the "glint" on the bead.
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = 'transparent';
+
       ctx.globalCompositeOperation = 'screen';
       ctx.fillStyle = `rgba(255, 251, 244, ${+(blobA * 0.80).toFixed(3)})`;
       ctx.beginPath();
       ctx.arc(hlX, hlY, tHW * 0.30, 0, Math.PI * 2);
       ctx.fill();
+
       ctx.globalCompositeOperation = 'source-over';
     }
   }
@@ -375,97 +448,171 @@ function renderStroke(
   ctx.restore();
 }
 
-// ── Full scene render ──────────────────────────────────────────────────────────
 function renderScene(
   ctx: CanvasRenderingContext2D,
   strokes: Stroke[],
   elapsed: number,
   cw: number,
   ch: number,
+  texture: HTMLImageElement | null,
+  textureStrength: number,
+  background: string,
 ) {
-  ctx.fillStyle = '#F7F1E7';
+  ctx.clearRect(0, 0, cw, ch);
+  ctx.fillStyle = background;
   ctx.fillRect(0, 0, cw, ch);
+
   for (const s of strokes) {
     const se = elapsed - s.t0;
     if (se <= 0) continue;
-    renderStroke(ctx, s, easeOutCubic(Math.min(1, se / s.dt)), cw, ch);
+    renderStroke(ctx, s, easeOutCubic(Math.min(1, se / s.dt)), cw, ch, texture, textureStrength);
   }
 }
 
-// ── Component ──────────────────────────────────────────────────────────────────
-export default function LiquidBrushStrokeCanvas() {
-  const canvasRef    = useRef<HTMLCanvasElement>(null);
+export default function LiquidBrushStrokeCanvas({
+  textureSrc = '/brush-texture.webp',
+  textureStrength = 0.70,
+  background = '#F7F1E7',
+}: Props) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const rafRef       = useRef<number | null>(null);
-  const t0Ref        = useRef<number | null>(null);
-  const strokesRef   = useRef<Stroke[] | null>(null);
-  const sizeRef      = useRef({ w: 0, h: 0 });
-  const doneRef      = useRef(false);
+
+  const rafRef = useRef<number | null>(null);
+  const t0Ref = useRef<number | null>(null);
+
+  const strokesRef = useRef<Stroke[] | null>(null);
+  const sizeRef = useRef({ w: 0, h: 0 });
+
+  const doneRef = useRef(false);
+
+  const textureRef = useRef<HTMLImageElement | null>(null);
+  const textureReadyRef = useRef(false);
 
   useEffect(() => {
-    const canvas    = canvasRef.current;
+    const canvas = canvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container) return;
+
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    // Crisp rendering; clamp DPR for performance.
+    const computeDpr = () => Math.min(window.devicePixelRatio ?? 1, 2);
+
     const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     strokesRef.current = buildStrokes();
+    doneRef.current = false;
+    t0Ref.current = null;
 
-    function resize() {
-      const cw  = container!.offsetWidth;
-      const ch  = container!.offsetHeight;
-      const dpr = Math.min(window.devicePixelRatio ?? 1, 2);
-      canvas!.width  = cw * dpr;
-      canvas!.height = ch * dpr;
-      canvas!.style.width  = `${cw}px`;
-      canvas!.style.height = `${ch}px`;
-      ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
-      sizeRef.current = { w: cw, h: ch };
-    }
+    let cancelled = false;
 
-    function frame(elapsed: number) {
+    // Load photoreal texture (from /public)
+    const img = new Image();
+    img.decoding = 'async';
+    img.loading = 'eager';
+    img.src = textureSrc;
+
+    img.onload = () => {
+      if (cancelled) return;
+      textureRef.current = img;
+      textureReadyRef.current = true;
+
+      // Redraw immediately with texture if already rendered
       const { w, h } = sizeRef.current;
-      if (strokesRef.current) renderScene(ctx!, strokesRef.current, elapsed, w, h);
-    }
+      if (w && h && strokesRef.current) {
+        const now = performance.now();
+        const elapsed = prefersReduced
+          ? ANIM_END
+          : Math.min(((now - (t0Ref.current ?? now)) / 1000), ANIM_END);
 
-    function loop(ts: number) {
+        renderScene(ctx, strokesRef.current, elapsed, w, h, textureRef.current, textureStrength, background);
+      }
+    };
+
+    img.onerror = () => {
+      if (cancelled) return;
+      textureRef.current = null;
+      textureReadyRef.current = false;
+      // Keep rendering without texture (still looks good, just less photoreal)
+    };
+
+    const resize = () => {
+      const cw = container.offsetWidth;
+      const ch = container.offsetHeight;
+      const dpr = computeDpr();
+
+      canvas.width = Math.max(1, Math.floor(cw * dpr));
+      canvas.height = Math.max(1, Math.floor(ch * dpr));
+      canvas.style.width = `${cw}px`;
+      canvas.style.height = `${ch}px`;
+
+      // Draw in CSS pixels
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      sizeRef.current = { w: cw, h: ch };
+    };
+
+    const drawFrame = (elapsed: number) => {
+      const { w, h } = sizeRef.current;
+      if (!strokesRef.current) return;
+
+      renderScene(
+        ctx,
+        strokesRef.current,
+        elapsed,
+        w,
+        h,
+        textureReadyRef.current ? textureRef.current : null,
+        textureStrength,
+        background,
+      );
+    };
+
+    const loop = (ts: number) => {
+      if (cancelled) return;
       if (t0Ref.current === null) t0Ref.current = ts;
+
       const elapsed = (ts - t0Ref.current) / 1000;
+
       if (elapsed >= ANIM_END) {
-        frame(ANIM_END);
+        drawFrame(ANIM_END);
         doneRef.current = true;
-        rafRef.current  = null;
+        rafRef.current = null;
         return;
       }
-      frame(elapsed);
+
+      drawFrame(elapsed);
       rafRef.current = requestAnimationFrame(loop);
-    }
+    };
 
     resize();
 
     if (prefersReduced) {
-      frame(ANIM_END);
+      drawFrame(ANIM_END);
+      doneRef.current = true;
     } else {
       rafRef.current = requestAnimationFrame(loop);
     }
 
     const ro = new ResizeObserver(() => {
       resize();
-      if (doneRef.current || prefersReduced) {
-        frame(ANIM_END);
-      } else if (t0Ref.current !== null) {
-        // Redraw at current progress immediately so there is no blank-canvas flash.
-        frame(Math.min((performance.now() - t0Ref.current) / 1000, ANIM_END));
+      if (prefersReduced || doneRef.current) {
+        drawFrame(ANIM_END);
+      } else {
+        const now = performance.now();
+        const base = t0Ref.current ?? now;
+        drawFrame(Math.min((now - base) / 1000, ANIM_END));
       }
     });
+
     ro.observe(container);
 
     return () => {
+      cancelled = true;
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
       ro.disconnect();
     };
-  }, []);
+  }, [textureSrc, textureStrength, background]);
 
   return (
     <div
